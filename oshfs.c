@@ -23,7 +23,7 @@ struct LinkList {
     long i;
     struct LinkList *prev;
     struct LinkList * next;
-} *aMemHeap, aMemHead;
+} *aMemHeap, *aMemHead;
 
 struct filenode {
     char *filename;
@@ -34,21 +34,160 @@ struct filenode {
     struct filenode *prev;
 };
 
-static const size_t size = 4 * 1024;  //总大小，4GB, 4 * 1024 * 1024 * (size_t)1024
-static char *mem[1024];   //指向内存位置的指针的数组，size 和 mem 共同决定  blocksize , 64*1024
+static const size_t size = 4 * 1024 * 1024 *(size_t) 1024;  //总大小，4GB, 4 * 1024 * 1024 * (size_t)1024
+static char *mem[64*1024];   //指向内存位置的指针的数组，size 和 mem 共同决定  blocksize , 64*1024
 static size_t blocknr;
 static size_t blocksize;
+static size_t FileNodeAddressSpace;
+static size_t LinkListAddressSpace;
+static size_t num_of_file_nodes_in_a_block;
+static size_t num_of_link_list_nodes_in_a_block;
+
+#define Initialize 0
+#define Malloc 1
+#define Free 2
+
+#define MemFree 0
+#define DataAppend 1
+#define MemUse 2
+#define MemTableInit 3
 
 static struct filenode *root = NULL;
 
-static struct LinkList* append_link_list(size_t i, struct LinkList *heap){
+static struct filenode * file_node_address_space_init(int mode, struct filenode * pass, int address_space_num, int node_num_to_initialize){
+    size_t headersize;
+    headersize = sizeof(struct filenode *);
+    switch (mode)
+    {
+        case Initialize:{
+            struct filenode *temp, *last;
+            char *file_node_address_space = mem[address_space_num];
+            size_t nodesize = (sizeof(struct filenode) + 256 + sizeof(stat));
+            
+            memset(file_node_address_space, 0, blocksize);
+
+            file_node_address_space += headersize;
+
+            if (pass) 
+                pass->next = (struct filenode*)file_node_address_space;
+
+            memcpy(mem[address_space_num], &file_node_address_space, headersize);
+
+            last = NULL;
+            for(long i = 0; i < node_num_to_initialize; i++){
+                temp = (struct filenode *)(file_node_address_space + i * nodesize);
+                if(last)
+                    last->next = temp;
+                temp->next = NULL;
+                temp->prev = last;
+                last = temp;
+            }
+            return last;
+        }
+        case Malloc:{
+            struct filenode * pointer_to_available;
+            char *file_node_address_space = mem[FileNodeAddressSpace];
+            memcpy(&pointer_to_available, file_node_address_space, headersize);
+            memcpy(file_node_address_space, &pointer_to_available->next, headersize);
+
+            return pointer_to_available;
+
+        }
+        case Free:{
+            struct filenode * pointer_to_available, *temp = pass;
+            char *file_node_address_space = mem[FileNodeAddressSpace];
+            memcpy(&pointer_to_available, file_node_address_space, headersize);
+            if(!pass)
+                break;
+            temp = pass->next;
+            pass->next = pointer_to_available;
+            memcpy(file_node_address_space, &pass, headersize);
+            return temp;
+        }break;
+        default:
+            break;
+    }
+    return NULL;
+}
+static struct LinkList* link_list_address_space_init(int mode, struct LinkList * pass, int address_space_num, int node_num_to_initialize){
+    size_t headersize;
+    headersize = sizeof(struct LinkList *);
+    switch (mode)
+    {
+        case Initialize:{
+            struct LinkList *temp, *last;
+            char *link_list_address_space = mem[address_space_num];
+            size_t nodesize = sizeof(struct LinkList);
+            
+            memset(link_list_address_space, 0, blocksize);
+
+            link_list_address_space += headersize;
+
+            if (pass) 
+                pass->next = (struct LinkList*)link_list_address_space;
+
+            memcpy(mem[address_space_num], &link_list_address_space, headersize);
+
+            last = NULL;
+            for(long i = 0; i < node_num_to_initialize; i++){
+                temp = (struct LinkList *)(link_list_address_space + i * nodesize);
+                if(last)
+                    last->next = temp;
+                temp->next = NULL;
+                temp->prev = last;
+                last = temp;
+            }
+            return last;
+        }
+        case Malloc:{
+            struct LinkList * pointer_to_available;
+            char *link_list_address_space = mem[LinkListAddressSpace];
+            memcpy(&pointer_to_available, link_list_address_space, headersize);
+            memcpy(link_list_address_space, &pointer_to_available->next, headersize);
+            return pointer_to_available;
+        }
+        case Free:{
+            struct LinkList * pointer_to_available, *temp = pass;
+            char *link_list_address_space = mem[LinkListAddressSpace];
+            memcpy(&pointer_to_available, link_list_address_space, headersize);
+            if(!pass)
+                break;
+            temp = pass->next;
+            pass->next = pointer_to_available;
+            memcpy(link_list_address_space, &pass, headersize);
+            return temp;
+        }
+        default:
+            break;
+    }
+    return NULL;
+}
+
+static struct LinkList* append_link_list(size_t i, struct LinkList *heap, int mode){
     if(i == -1)
         return heap;
-    heap->next =(struct LinkList *) malloc(sizeof(struct LinkList));
+    // heap->next =(struct LinkList *) malloc(sizeof(struct LinkList));
+    heap->next = link_list_address_space_init(Malloc, NULL, 0, 0);
     heap->next->prev = heap;
     heap = heap->next;
     heap->i = i;
     heap->next = NULL;
+    
+    switch (mode)
+    {
+        case MemFree: 
+            munmap(mem[i], blocksize);
+            break;
+        case MemUse :
+            mem[i] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            break;
+        case DataAppend: 
+            break;
+        case MemTableInit:
+            break;
+        default:
+            break;
+    }
     return heap;
 }
 
@@ -57,20 +196,18 @@ static size_t pop_link_list(struct LinkList *head){
     temp->next->prev = head;
     head->next = temp->next;
     size_t i = temp->i;
-    free(temp);
+    link_list_address_space_init(Free, temp, 0, 0);
     return i;
 }
 
 static struct LinkList * del_link_list_from_tail(struct LinkList * old_heap){
     struct LinkList * heap = old_heap;
-    if(heap->i == -1)
+    if(heap->i == -1 || heap->prev == NULL) 
         return heap;
-    if(heap->prev == NULL)
-        return old_heap;
     else{
         heap = old_heap->prev;
         heap->next = NULL;
-        free(old_heap);
+        link_list_address_space_init(Free, old_heap, 0, 0);
         return heap;
     }
 }
@@ -82,7 +219,7 @@ static struct LinkList * get_or_create_link_list_node(int offset, struct LinkLis
         node = node->next ;
         offset--;
         if(node == NULL && flag == 1){
-            node = append_link_list(pop_link_list(&aMemHead), temp);
+            node = append_link_list(pop_link_list(aMemHead), temp, MemUse);
             *pointer_to_heap = node;
         }
     }
@@ -103,10 +240,11 @@ static struct filenode *get_filenode(const char *name)
 
 static void create_filenode(const char *filename, const struct stat *st)
 {
-    struct filenode *new = (struct filenode *)malloc(sizeof(struct filenode));
-    new->filename = (char *)malloc(strlen(filename) + 1);   //存文件名
+    // struct filenode *new = (struct filenode *)malloc(sizeof(struct filenode));
+    struct filenode *new = file_node_address_space_init(Malloc, NULL, 0, 0);
+    new->filename = (char *)(new + sizeof(struct filenode));   //存文件名
     memcpy(new->filename, filename, strlen(filename) + 1);
-    new->st = (struct stat *)malloc(sizeof(struct stat));   //存文件状态
+    new->st = (struct stat *)(new + 256);   //存文件状态
     memcpy(new->st, st, sizeof(struct stat));
     new->next = root;
     if(root != NULL)
@@ -122,18 +260,42 @@ static void *oshfs_init(struct fuse_conn_info *conn)
 {
     blocknr = sizeof(mem) / sizeof(mem[0]);
     blocksize = size / blocknr;
-
+    
+    num_of_file_nodes_in_a_block = (blocksize - sizeof(struct filenode *)) / (sizeof(struct filenode) + 256 + sizeof(struct stat));
+    num_of_link_list_nodes_in_a_block = (blocksize - sizeof(struct LinkList *)) / sizeof(struct LinkList);
     // Demo 1
     int i;
-    aMemHeap = &aMemHead;
-    for(i = 0; i < blocknr - 1; i++) {
-        mem[i] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        aMemHeap = append_link_list(i, aMemHeap);
-        // memset(mem[i], 0, blocksize);
+    
+    FileNodeAddressSpace = blocknr - 1;
+
+    long node_num_to_initialize;
+    node_num_to_initialize = blocknr;
+    struct filenode *lastf = NULL;
+    for(i = 0 ; node_num_to_initialize > 0 ; node_num_to_initialize -= num_of_file_nodes_in_a_block, i++){
+        mem[FileNodeAddressSpace - i] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        lastf = file_node_address_space_init(Initialize, lastf, FileNodeAddressSpace - i, num_of_file_nodes_in_a_block);
     }
-    aMemHead.i = i;
-    aMemHead.prev = NULL;
-    mem[i] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    
+    LinkListAddressSpace = blocknr - i;
+    node_num_to_initialize = blocknr * 2;
+    struct LinkList *lastl = NULL;
+    for(i = 0 ; node_num_to_initialize > 0 ; node_num_to_initialize -= num_of_file_nodes_in_a_block, i++){
+        mem[LinkListAddressSpace - i] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        lastl = link_list_address_space_init(Initialize, lastl, LinkListAddressSpace - i, num_of_link_list_nodes_in_a_block);
+    }
+
+    aMemHead = link_list_address_space_init(Malloc, NULL, 0,0);
+    aMemHeap = aMemHead;
+
+    size_t blocknr_boundry = LinkListAddressSpace - i;
+
+    for(i = 0; i < blocknr_boundry; i++) {
+    //     mem[i] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        aMemHeap = append_link_list(i, aMemHeap, MemTableInit);
+    //     // memset(mem[i], 0, blocksize);
+    }
+    aMemHead->i = blocknr_boundry;
+    aMemHead->prev = NULL;
     // for(int i = 0; i < blocknr; i++) {
     //     munmap(mem[i], blocksize);
     // }
@@ -245,11 +407,11 @@ static int oshfs_truncate(const char *path, off_t size)
     struct filenode *node = get_filenode(path);
     if(size > node->st->st_size){
         for(int i = size / blocksize - node->st->st_size / blocksize; i > 0 ; i--)
-            node->heap = append_link_list(pop_link_list(&aMemHead), node->heap);
+            node->heap = append_link_list(pop_link_list(aMemHead), node->heap, MemUse);
     }
     else {
         for(int i = node->st->st_size / blocksize - size / blocksize; i > 0 ; i--)
-            aMemHeap = append_link_list(node->heap->i, aMemHeap);
+            aMemHeap = append_link_list(node->heap->i, aMemHeap, MemFree);
             node->heap = del_link_list_from_tail(node->heap);
     }
     node->st->st_size = size;
@@ -259,21 +421,23 @@ static int oshfs_truncate(const char *path, off_t size)
 static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
     struct filenode *node = get_filenode(path);
-    int ret = size;
+    int ret = size, sizeread;
     if(offset + size > node->st->st_size)
         ret = node->st->st_size - offset;
-    size_t length_to_read, block_offset;
+    sizeread = ret;
+    size_t length_to_read_first, block_offset;
     size_t length_read = 0;
-    block_offset = (offset + size) / blocksize;
-    length_to_read = (offset % blocksize + size) > blocksize ? blocksize - offset % blocksize : size;
+    block_offset = offset / blocksize;
+    length_to_read_first = (offset % blocksize + size) > blocksize ? blocksize - offset % blocksize : size;
 
     struct LinkList * block_being_read;
     block_being_read = get_or_create_link_list_node(block_offset, &node->content, NULL, 0);
-    memcpy(buf, mem[block_being_read->i] + offset % blocksize, length_to_read);
+    memcpy(buf, mem[block_being_read->i] + offset % blocksize, length_to_read_first);
 
-    while(1){
-        ret -= length_to_read;
-        length_read += length_to_read;
+    ret -= length_to_read_first;
+    length_read += length_to_read_first;
+
+    while(ret > 0){
         block_being_read = get_or_create_link_list_node(0, block_being_read, NULL, 0);
         if(ret <= blocksize){
             memcpy(buf + length_read, mem[block_being_read->i], ret);
@@ -281,9 +445,11 @@ static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, st
         } 
         else
             memcpy(buf + length_read, mem[block_being_read->i], blocksize);
-        length_to_read = blocksize;
+        ret -= blocksize;
+        length_read += blocksize;
+        
     }
-    return ret;
+    return sizeread;
 }
 
 static int oshfs_unlink(const char *path)
@@ -297,24 +463,21 @@ static int oshfs_unlink(const char *path)
         return 0;
 
     data = &file_to_unlink->content;    //content
-    next = data->next;
-    free(data);
-    data = next;
     while(data != NULL){
         next = data->next;
-        aMemHeap = append_link_list(data->i, aMemHeap);
-        free(data);
+        aMemHeap = append_link_list(data->i, aMemHeap, MemFree);
+        link_list_address_space_init(Free, data, 0, 0);
         data = next;
     }
-    
-    if (file_to_unlink->prev) 
-        file_to_unlink->prev->next = file_to_unlink->next;
-    
-    if (file_to_unlink->next)
-        file_to_unlink->next->prev = file_to_unlink->prev;
-    free(file_to_unlink->st);           //stat
-    free(file_to_unlink->filename);     //filename
-    free(file_to_unlink);
+    if (!file_to_unlink->prev && !file_to_unlink->next)
+        root = NULL;
+    else {
+        if (file_to_unlink->prev) 
+            file_to_unlink->prev->next = file_to_unlink->next;
+        else
+            file_to_unlink->next->prev = file_to_unlink->prev;
+    }        
+    file_node_address_space_init(Free, file_to_unlink, 0, 0);
     return 0;
 }
 
