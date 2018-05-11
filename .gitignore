@@ -1,0 +1,13 @@
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/settings.json
+blogfs
+blogfs.c
+hello.c
+list.h
+oshfs
+tryfs
+tryfs.c
+*.pdf
+*.md
+
