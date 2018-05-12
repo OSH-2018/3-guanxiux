@@ -34,14 +34,12 @@ struct filenode {
     struct filenode *prev;
 };
 
-static const size_t size = 4 * 1024 *(size_t) 1024;  //总大小，4GB, 4 * 1024 * 1024 * (size_t)1024
-static char *mem[4];   //指向内存位置的指针的数组，size 和 mem 共同决定  blocksize , 64*1024
-static size_t blocknr;
-static size_t blocksize;
+// static const size_t size = 4 *1024 *1024 *(size_t)1024;  //总大小，4GB, 4 * 1024 * 1024 * (size_t)1024
+static char *mem[64 * 1024 + 2];   //指向内存位置的指针的数组，size 和 mem 共同决定  blocksize , 64*1024
+static size_t blocknr = 64 * 1024;
+static size_t blocksize = 64 * 1024;
 static size_t FileNodeAddressSpace;
 static size_t LinkListAddressSpace;
-static size_t num_of_file_nodes_in_a_block;
-static size_t num_of_link_list_nodes_in_a_block;
 
 #define Initialize 0
 #define Malloc 1
@@ -248,7 +246,6 @@ static struct filenode *get_filenode(const char *name)
 
 static void create_filenode(const char *filename, const struct stat *st)
 {
-    // struct filenode *new = (struct filenode *)malloc(sizeof(struct filenode));
     struct filenode *new = file_node_address_space_init(Malloc, NULL, 0, 0);
     new->filename = (char *)(new + sizeof(struct filenode));   //存文件名
     memcpy(new->filename, filename, strlen(filename) + 1);
@@ -267,31 +264,17 @@ static void create_filenode(const char *filename, const struct stat *st)
 
 static void *oshfs_init(struct fuse_conn_info *conn)
 {
-    blocknr = sizeof(mem) / sizeof(mem[0]);
-    blocksize = size / blocknr;
-    
-    num_of_file_nodes_in_a_block = (blocksize - sizeof(struct filenode *)) / (sizeof(struct filenode) + 256 + sizeof(struct stat));
-    num_of_link_list_nodes_in_a_block = (blocksize - sizeof(struct LinkList *)) / sizeof(struct LinkList);
-    // Demo 1
     int i;
     
-    FileNodeAddressSpace = blocknr - 1;
+    size_t scale_of_file_node_address_space = 8 + (sizeof(struct filenode) + 256 + sizeof(struct stat)) * (blocknr + 2);
+    FileNodeAddressSpace = blocknr + 1;
+    mem[FileNodeAddressSpace] = mmap(NULL, scale_of_file_node_address_space, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    file_node_address_space_init(Initialize, NULL, FileNodeAddressSpace, blocknr);
 
-    long node_num_to_initialize;
-    node_num_to_initialize = blocknr;
-    struct filenode *lastf = NULL;
-    for(i = 0 ; node_num_to_initialize > 0 ; node_num_to_initialize -= num_of_file_nodes_in_a_block, i++){
-        mem[FileNodeAddressSpace - i] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        lastf = file_node_address_space_init(Initialize, lastf, FileNodeAddressSpace - i, num_of_file_nodes_in_a_block);
-    }
-    
-    LinkListAddressSpace = blocknr - 1 - i;
-    node_num_to_initialize = blocknr * 2;
-    struct LinkList *lastl = NULL;
-    for(i = 0 ; node_num_to_initialize > 0 ; node_num_to_initialize -= num_of_file_nodes_in_a_block, i++){
-        mem[LinkListAddressSpace - i] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        lastl = link_list_address_space_init(Initialize, lastl, LinkListAddressSpace - i, num_of_link_list_nodes_in_a_block);
-    }
+    size_t scale_of_link_list_address_space = 2 * (blocknr + 2) *sizeof(struct LinkList);    
+    LinkListAddressSpace = blocknr;
+    mem[LinkListAddressSpace] = mmap(NULL, scale_of_link_list_address_space, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    link_list_address_space_init(Initialize, NULL, LinkListAddressSpace, blocknr);
 
     aMemHead = link_list_address_space_init(Malloc, NULL, 0,0);
     aMemHeap = aMemHead;
@@ -362,7 +345,6 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
     node->st->st_size = offset + size;
     size_t temp = size;
     size_t block_num = node->st->st_size/blocksize + 1;
-
     size_t block_offset = offset/blocksize;   
     size_t length_written = 0;
     size_t length_to_write_first = 0;
@@ -370,14 +352,11 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
     struct LinkList *block_writing;
 
     block_writing = get_or_create_link_list_node(block_offset, &node->content, &node->heap, 1);
-
     length_to_write_first = ( (offset % blocksize + size) > blocksize) ? blocksize - offset % blocksize : size ;
+    size -= length_to_write_first;
+    length_written += length_to_write_first;
     
     memcpy(mem[block_writing->i] + offset%blocksize, buf, length_to_write_first);
-
-    size -= length_to_write_first;
-
-    length_written += length_to_write_first;
 
     while(size > 0){
         block_writing = get_or_create_link_list_node(0, block_writing, &node->heap, 1);
@@ -390,7 +369,6 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
         length_written += blocksize;
         size -= blocksize;
     }
-    
     return temp;
 }
 
@@ -420,15 +398,15 @@ static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, st
     sizeread = ret;
     size_t length_to_read_first, block_offset;
     size_t length_read = 0;
+
     block_offset = offset / blocksize;
     length_to_read_first = (offset % blocksize + size) > blocksize ? blocksize - offset % blocksize : size;
+    ret -= length_to_read_first;
+    length_read += length_to_read_first;
 
     struct LinkList * block_being_read;
     block_being_read = get_or_create_link_list_node(block_offset, &node->content, NULL, 0);
     memcpy(buf, mem[block_being_read->i] + offset % blocksize, length_to_read_first);
-
-    ret -= length_to_read_first;
-    length_read += length_to_read_first;
 
     while(ret > 0){
         block_being_read = get_or_create_link_list_node(0, block_being_read, NULL, 0);
@@ -487,7 +465,7 @@ static const struct fuse_operations op = {
 
 int main(int argc, char *argv[])
 {
-    char *s[]={"/media/guanxiux/Data/OSH/3-guanxiux","-f", "-s" ,"mountpoint"};
-    return fuse_main(4, s, &op, NULL);
-    // return fuse_main(argc, argv, &op, NULL);
+    // char *s[]={"/media/guanxiux/Data/OSH/3-guanxiux","-f", "-s" ,"mountpoint"};
+    // return fuse_main(4, s, &op, NULL);
+    return fuse_main(argc, argv, &op, NULL);
 }
