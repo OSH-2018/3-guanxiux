@@ -34,8 +34,8 @@ struct filenode {
     struct filenode *prev;
 };
 
-static const size_t size = 4 * 1024 * 1024 *(size_t) 1024;  //总大小，4GB, 4 * 1024 * 1024 * (size_t)1024
-static char *mem[64*1024];   //指向内存位置的指针的数组，size 和 mem 共同决定  blocksize , 64*1024
+static const size_t size = 4 * 1024 *(size_t) 1024;  //总大小，4GB, 4 * 1024 * 1024 * (size_t)1024
+static char *mem[4];   //指向内存位置的指针的数组，size 和 mem 共同决定  blocksize , 64*1024
 static size_t blocknr;
 static size_t blocksize;
 static size_t FileNodeAddressSpace;
@@ -88,21 +88,19 @@ static struct filenode * file_node_address_space_init(int mode, struct filenode 
             struct filenode * pointer_to_available;
             char *file_node_address_space = mem[FileNodeAddressSpace];
             memcpy(&pointer_to_available, file_node_address_space, headersize);
+            if(!pointer_to_available)
+                exit(1);
             memcpy(file_node_address_space, &pointer_to_available->next, headersize);
-
             return pointer_to_available;
-
         }
         case Free:{
-            struct filenode * pointer_to_available, *temp = pass;
+            struct filenode * pointer_to_available;
             char *file_node_address_space = mem[FileNodeAddressSpace];
             memcpy(&pointer_to_available, file_node_address_space, headersize);
             if(!pass)
                 break;
-            temp = pass->next;
             pass->next = pointer_to_available;
             memcpy(file_node_address_space, &pass, headersize);
-            return temp;
         }break;
         default:
             break;
@@ -133,7 +131,7 @@ static struct LinkList* link_list_address_space_init(int mode, struct LinkList *
                 temp = (struct LinkList *)(link_list_address_space + i * nodesize);
                 if(last)
                     last->next = temp;
-                temp->next = NULL;
+                temp->next = NULL;  
                 temp->prev = last;
                 last = temp;
             }
@@ -143,20 +141,21 @@ static struct LinkList* link_list_address_space_init(int mode, struct LinkList *
             struct LinkList * pointer_to_available;
             char *link_list_address_space = mem[LinkListAddressSpace];
             memcpy(&pointer_to_available, link_list_address_space, headersize);
+            if(!pointer_to_available)
+                exit(1);
             memcpy(link_list_address_space, &pointer_to_available->next, headersize);
             return pointer_to_available;
         }
         case Free:{
-            struct LinkList * pointer_to_available, *temp = pass;
+            struct LinkList * pointer_to_available;
             char *link_list_address_space = mem[LinkListAddressSpace];
             memcpy(&pointer_to_available, link_list_address_space, headersize);
             if(!pass)
                 break;
-            temp = pass->next;
             pass->next = pointer_to_available;
             memcpy(link_list_address_space, &pass, headersize);
-            return temp;
-        }
+
+        }break;
         default:
             break;
     }
@@ -164,15 +163,13 @@ static struct LinkList* link_list_address_space_init(int mode, struct LinkList *
 }
 
 static struct LinkList* append_link_list(size_t i, struct LinkList *heap, int mode){
-    if(i == -1)
+    if(i == -1)         //若是文件内容的头节点
         return heap;
-    // heap->next =(struct LinkList *) malloc(sizeof(struct LinkList));
     heap->next = link_list_address_space_init(Malloc, NULL, 0, 0);
     heap->next->prev = heap;
     heap = heap->next;
     heap->i = i;
     heap->next = NULL;
-    
     switch (mode)
     {
         case MemFree: 
@@ -191,13 +188,24 @@ static struct LinkList* append_link_list(size_t i, struct LinkList *heap, int mo
     return heap;
 }
 
-static size_t pop_link_list(struct LinkList *head){
+static long pop_link_list(struct LinkList *head){
     struct LinkList* temp= head->next;
-    temp->next->prev = head;
-    head->next = temp->next;
+    if (!head || !temp)
+        return -1;
     size_t i = temp->i;
-    link_list_address_space_init(Free, temp, 0, 0);
-    return i;
+    if(temp->next){
+        temp->next->prev = head;
+        head->next = temp->next;
+        link_list_address_space_init(Free, temp, 0, 0);
+        return i;
+    }
+    else{
+        head->next = temp->next;
+        if(head == aMemHead)
+            aMemHeap = aMemHead;
+        link_list_address_space_init(Free, temp, 0, 0);
+        return i;
+    }
 }
 
 static struct LinkList * del_link_list_from_tail(struct LinkList * old_heap){
@@ -246,6 +254,7 @@ static void create_filenode(const char *filename, const struct stat *st)
     memcpy(new->filename, filename, strlen(filename) + 1);
     new->st = (struct stat *)(new + 256);   //存文件状态
     memcpy(new->st, st, sizeof(struct stat));
+    new->prev = NULL;
     new->next = root;
     if(root != NULL)
         root->prev = new;                                       //创建链表
@@ -276,7 +285,7 @@ static void *oshfs_init(struct fuse_conn_info *conn)
         lastf = file_node_address_space_init(Initialize, lastf, FileNodeAddressSpace - i, num_of_file_nodes_in_a_block);
     }
     
-    LinkListAddressSpace = blocknr - i;
+    LinkListAddressSpace = blocknr - 1 - i;
     node_num_to_initialize = blocknr * 2;
     struct LinkList *lastl = NULL;
     for(i = 0 ; node_num_to_initialize > 0 ; node_num_to_initialize -= num_of_file_nodes_in_a_block, i++){
@@ -289,33 +298,18 @@ static void *oshfs_init(struct fuse_conn_info *conn)
 
     size_t blocknr_boundry = LinkListAddressSpace - i;
 
-    for(i = 0; i < blocknr_boundry; i++) {
-    //     mem[i] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    for(i = 0; i <= blocknr_boundry; i++) {
         aMemHeap = append_link_list(i, aMemHeap, MemTableInit);
-    //     // memset(mem[i], 0, blocksize);
     }
-    aMemHead->i = blocknr_boundry;
+    aMemHead->i = blocknr_boundry + 1;
     aMemHead->prev = NULL;
-    // for(int i = 0; i < blocknr; i++) {
-    //     munmap(mem[i], blocksize);
-    // }
-    /*
-    // Demo 2
-    mem[0] = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    for(int i = 0; i < blocknr; i++) {
-        mem[i] = (char *)mem[0] + blocksize * i;
-        // memset(mem[i], 0, blocksize);
-    }
-    for(int i = 0; i < blocknr; i++) {
-        munmap(mem[i], blocksize);
-    }*/
     return NULL;
 }
 
 static int oshfs_getattr(const char *path, struct stat *stbuf)
 {
     int ret = 0;
-    struct filenode *node = get_filenode(path);   //找到path的文件的指针，或者NULL
+    struct filenode *node = get_filenode(path);  
     if(strcmp(path, "/") == 0) {
         memset(stbuf, 0, sizeof(struct stat));
         stbuf->st_mode = S_IFDIR | 0755;
@@ -397,8 +391,6 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
         size -= blocksize;
     }
     
-    // node->content = realloc(node->content, offset + size);
-    // memcpy(node->content + offset, buf, size);
     return temp;
 }
 
@@ -410,9 +402,10 @@ static int oshfs_truncate(const char *path, off_t size)
             node->heap = append_link_list(pop_link_list(aMemHead), node->heap, MemUse);
     }
     else {
-        for(int i = node->st->st_size / blocksize - size / blocksize; i > 0 ; i--)
+        for(int i = node->st->st_size / blocksize - size / blocksize; i > 0 ; i--){
             aMemHeap = append_link_list(node->heap->i, aMemHeap, MemFree);
             node->heap = del_link_list_from_tail(node->heap);
+        }
     }
     node->st->st_size = size;
     return 0;
@@ -468,16 +461,15 @@ static int oshfs_unlink(const char *path)
         aMemHeap = append_link_list(data->i, aMemHeap, MemFree);
         link_list_address_space_init(Free, data, 0, 0);
         data = next;
-    }
-    if (!file_to_unlink->prev && !file_to_unlink->next)
-        root = NULL;
-    else {
-        if (file_to_unlink->prev) 
-            file_to_unlink->prev->next = file_to_unlink->next;
-        else
-            file_to_unlink->next->prev = file_to_unlink->prev;
-    }        
+    } 
+    if (file_to_unlink->prev) 
+        file_to_unlink->prev->next = file_to_unlink->next;
+    if (file_to_unlink->next)
+        file_to_unlink->next->prev = file_to_unlink->prev;
+    if(file_to_unlink == root)
+        root = root->next;
     file_node_address_space_init(Free, file_to_unlink, 0, 0);
+    
     return 0;
 }
 
@@ -495,7 +487,7 @@ static const struct fuse_operations op = {
 
 int main(int argc, char *argv[])
 {
-    // char *s[]={"/media/guanxiux/Data/OSH/3-guanxiux","-f", "-s" ,"mountpoint"};
-    // return fuse_main(4, s, &op, NULL);
-    return fuse_main(argc, argv, &op, NULL);
+    char *s[]={"/media/guanxiux/Data/OSH/3-guanxiux","-f", "-s" ,"mountpoint"};
+    return fuse_main(4, s, &op, NULL);
+    // return fuse_main(argc, argv, &op, NULL);
 }
