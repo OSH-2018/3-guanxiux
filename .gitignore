@@ -5,7 +5,7 @@ blogfs
 blogfs.c
 hello.c
 list.h
-oshfs
+
 tryfs
 tryfs.c
 *.pdf

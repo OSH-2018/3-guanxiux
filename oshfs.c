@@ -34,9 +34,10 @@ struct filenode {
     struct filenode *prev;
 };
 
-static char *mem[64 * 1024 + 2];  
+static size_t size = 4 * 1024 * 1024 * (size_t)1024;
+static char *mem[64 * 1024];  
 static size_t blocknr ;
-static size_t blocksize = 64 * 1024;
+static size_t blocksize;
 static size_t FileNodeAddressSpace;
 static size_t LinkListAddressSpace;
 char *blockbuffer;
@@ -188,7 +189,7 @@ static struct LinkList* append_link_list(size_t i, struct LinkList *heap, int mo
             munmap(mem[i], blocksize);
             break;
         case MemUse :
-            mem[i] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            mem[i] = mmap(mem[i], blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
             break;
         case DataAppend: 
             break;
@@ -248,41 +249,6 @@ static struct LinkList * get_or_create_link_list_node(int offset, struct LinkLis
     return node;
 }
 
-
-
-// static void write_catch(const char *buf, size_t size, off_t offset, int mode, struct LinkList **heap){
-//     if(State == NotWriting)
-//         return;
-//     if (mode == NotTriggered){
-//         size_t  length_to_write, buf_covered = 0;
-        
-//         // length_to_write = (size + offset % blocksize > blocksize) ? blocksize - offset % blocksize : size ;
-//         // memcpy(blockbuffer + offset % blocksize, buf, length_to_write );
-//         // buf_covered += length_to_write;
-//         // block_buffer_length_written = offset % blocksize + length_to_write;
-
-//         // if( length_to_write + offset % blocksize >= blocksize ){
-//         //     memcpy(mem[block_writing->i], blockbuffer, blocksize);
-//         //     block_writing = get_or_create_link_list_node(0, block_writing, heap, 1);
-//         //     memset(blockbuffer, 0 , blocksize);
-//         //     block_buffer_length_written = 0;
-//         //     tag = Written;
-//         // }
-
-//     if(mode == Triggered && tag == NotWritten){
-//         State = NotWriting;
-//         memcpy(mem[block_writing->i], blockbuffer, block_buffer_length_written);
-//         memset(blockbuffer, 0 , blocksize);
-//         block_buffer_length_written = 0;
-//     }
-//     if(mode == Triggered && tag == Written){
-//         State = NotWriting;
-//         aMemHeap = append_link_list(block_writing->i, aMemHeap, MemFree);
-//         link_list_address_space_init(Free, block_writing, 0);
-//     }
-//     return;
-// }
-
 static struct filenode *get_filenode(const char *name)
 {
     struct filenode *node = root;
@@ -315,26 +281,32 @@ static void create_filenode(const char *filename, const struct stat *st)
 
 static void *oshfs_init(struct fuse_conn_info *conn)
 {   
-    blocknr = sizeof(mem)/sizeof(mem[0]) - 2;
-    size_t scale_of_file_node_address_space = 8 + (sizeof(struct filenode) + 256 + sizeof(struct stat)) * (blocknr + 2);
-    FileNodeAddressSpace = blocknr + 1;
-    mem[FileNodeAddressSpace] = mmap(NULL, scale_of_file_node_address_space, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    blocksize = size / (sizeof(mem)/sizeof(mem[0]));
+    blocknr = (size - 256) / (blocksize + (sizeof(struct filenode) + 256 + sizeof(struct stat)) + 2 * sizeof(struct LinkList)) + 2;
+    FileNodeAddressSpace = blocknr - 1;
+    LinkListAddressSpace = blocknr - 2;
+    mem[0] = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    for(int i = 0 ; i < LinkListAddressSpace; i++){
+        mem[i] = (char *)mem[0] + i * blocksize;
+    }
+
+    size_t scale_of_file_node_address_space = 8 + (sizeof(struct filenode) + 256 + sizeof(struct stat)) * blocknr;    
+    mem[FileNodeAddressSpace] = mem[0] + size - scale_of_file_node_address_space;
     file_node_address_space_init(Initialize, NULL, scale_of_file_node_address_space);
 
-    size_t scale_of_link_list_address_space = 2 * (blocknr + 2) *sizeof(struct LinkList);    
-    LinkListAddressSpace = blocknr;
-    mem[LinkListAddressSpace] = mmap(NULL, scale_of_link_list_address_space, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    size_t scale_of_link_list_address_space = 8 + 2 * blocknr * sizeof(struct LinkList);    
+    
+    mem[LinkListAddressSpace] = mem[0] + size - scale_of_file_node_address_space - scale_of_link_list_address_space - 100;
     link_list_address_space_init(Initialize, NULL, scale_of_link_list_address_space);
 
     aMemHead = link_list_address_space_init(Malloc, NULL, 0);
     aMemHeap = aMemHead;
 
-    size_t blocknr_boundry = LinkListAddressSpace - 1;
-
-    for(int i = 0; i < blocknr_boundry; i++) {
+    for(int i = 0; i < LinkListAddressSpace; i++) {
+        munmap(mem[i], blocksize);
         aMemHeap = append_link_list(i, aMemHeap, MemTableInit);
     }
-    aMemHead->i = blocknr_boundry + 1;
+    aMemHead->i = LinkListAddressSpace;
     aMemHead->prev = NULL;
     return NULL;
 }
@@ -481,6 +453,8 @@ static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, st
     if (State == NotReading){
         FileNodeReading = get_filenode(path);
     }
+    if(FileNodeReading == NULL)
+        return -ENOENT;
     size_t buf_covered = 0, ret;
     ProcessState = Starting;
     ret = FileNodeReading->st->st_size < size + offset ? FileNodeReading->st->st_size - offset : size;
