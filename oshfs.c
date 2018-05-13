@@ -35,7 +35,7 @@ struct filenode {
 };
 
 static char *mem[64 * 1024 + 2];  
-static size_t blocknr = 64 * 1024;
+static size_t blocknr ;
 static size_t blocksize = 64 * 1024;
 static size_t FileNodeAddressSpace;
 static size_t LinkListAddressSpace;
@@ -240,7 +240,7 @@ static struct LinkList * get_or_create_link_list_node(int offset, struct LinkLis
         offset--;
         if(node == NULL && flag == 1){
             node = append_link_list(pop_link_list(aMemHead), temp, MemUse);
-            if(temp == node)
+            if(temp == node || node == NULL)
                 return NULL;
             *pointer_to_heap = node;
         }
@@ -315,6 +315,7 @@ static void create_filenode(const char *filename, const struct stat *st)
 
 static void *oshfs_init(struct fuse_conn_info *conn)
 {   
+    blocknr = sizeof(mem)/sizeof(mem[0]) - 2;
     size_t scale_of_file_node_address_space = 8 + (sizeof(struct filenode) + 256 + sizeof(struct stat)) * (blocknr + 2);
     FileNodeAddressSpace = blocknr + 1;
     mem[FileNodeAddressSpace] = mmap(NULL, scale_of_file_node_address_space, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -436,12 +437,10 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
         else {
             if( (ProcessState == Starting || buf_covered > 0) && (offset + buf_covered) % blocksize == 0){
                 block_writing = get_or_create_link_list_node(0, block_writing, &FileNodeWriting->heap, 1);
-                if(block_writing == NULL)
-                    return -ENOSPC;
                 FileNodeWriting->st->st_blocks += 1;
             }
-            // if(buf_covered == size)
-            //         break;
+            if(block_writing == NULL)
+                return -ENOSPC;
         }
         ProcessState = Processing;
         if(size - buf_covered <= blocksize - (offset + buf_covered) % blocksize){
@@ -497,7 +496,7 @@ static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, st
             if( ( ProcessState == Starting || buf_covered > 0) && (offset + buf_covered) % blocksize == 0 ){
                 block_reading = get_or_create_link_list_node(0, block_reading, &FileNodeReading->heap, 0);
                 if(block_reading == NULL)
-                    return -ENOSPC;
+                    return 0;
                 FileNodeReading->st->st_blocks += 1;
             }
         }
