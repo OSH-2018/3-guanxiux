@@ -366,26 +366,16 @@ static int oshfs_open(const char *path, struct fuse_file_info *fi)
 {
     State = NotWriting;
     ProcessState = Starting;
+    time_t now;
+    time(&now);
+
+    struct filenode *file_opened = NULL;
+    file_opened = get_filenode(path);
+    if(file_opened){
+        file_opened->st->st_atime = now;
+    }
     return 0;
 }
-
-
-
-// static int oshfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi){
-    
-//     if (State == NotWriting) {
-//         FileNodeWriting = get_filenode(path);
-//         State = Writing;
-//         block_writing = &FileNodeWriting->content;
-//         size_t block_offset = offset/blocksize; 
-//         block_writing = get_or_create_link_list_node(block_offset, &FileNodeWriting->content, &FileNodeWriting->heap, 1);
-//     }
-//     if (State == Writing) {
-//         FileNodeWriting->st->st_size = offset + size;
-//         write_catch(buf, size, offset, NotTriggered, &(FileNodeWriting->heap));
-//     }
-//     return size;
-// }
 
 
 struct LinkList *block_writing = NULL;
@@ -394,7 +384,14 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 {
     if (State == NotWriting){
         FileNodeWriting = get_filenode(path);
+        if(FileNodeWriting){
+            time_t now;
+            time(&now);
+            FileNodeWriting->st->st_mtime = now;
+        }
     }
+    if(!FileNodeWriting)
+        return -ENOENT;
     ProcessState = Starting;
     FileNodeWriting->st->st_size = offset + size;
     size_t buf_covered = 0;  
@@ -489,7 +486,6 @@ static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, st
 
 static int oshfs_unlink(const char *path)
 {  
-    // Not Implemented
     struct filenode *file_to_unlink;
     struct LinkList *data,*next ;
     file_to_unlink = get_filenode(path);
