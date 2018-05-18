@@ -39,7 +39,7 @@ static char * mem_space_starting_point;
 static size_t size = 4 * 1024 * 1024 *(size_t) 1024;
   
 
-static size_t blocksize, usetime = 0, freetime = 0;
+static size_t blocksize;
 static size_t blocknr;
 static int offset_to_blocksize;
 static int offset_to_blocknr;
@@ -199,11 +199,9 @@ static struct LinkList* append_link_list(char * mem_block, struct LinkList *heap
     {
         case MemFree: 
             munmap(mem_block, blocksize);
-            freetime ++;
             break;
         case MemUse :
             mem_block = mmap(mem_block, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-            usetime ++;
             break;
         case DataAppend: 
             break;
@@ -326,7 +324,6 @@ static void *oshfs_init(struct fuse_conn_info *conn)
     mem[0] = mem_space_starting_point + offset_to_MemSpace;
     for(int i = 0 ; i < blocknr - 2; i++){
         mem[i] = (char *)mem[0] + i * blocksize;
-        usetime++;
     }
 
     char * FileNodeAddressSpace, * LinkListAddressSpace;
@@ -350,7 +347,6 @@ static void *oshfs_init(struct fuse_conn_info *conn)
     aMemHeap = aMemHead;
 
     for(int i = 0; i < blocknr - 2; i++) {
-        freetime++;
         munmap(mem[i], blocksize);
         aMemHeap = append_link_list(mem[i], aMemHeap, MemTableInit);
     }
@@ -358,7 +354,6 @@ static void *oshfs_init(struct fuse_conn_info *conn)
     aMemHead->prev = NULL;
     memcpy(mem_space_starting_point + offset_to_aMemHead, &aMemHead, sizeof(aMemHead));
     memcpy(mem_space_starting_point + offset_to_aMemHeap, &aMemHeap, sizeof(aMemHeap));
-    printf("use %ld ;free %ld \n", usetime, freetime);
     return NULL;
 }
 
@@ -424,7 +419,6 @@ static int oshfs_open(const char *path, struct fuse_file_info *fi)
     if(file_opened){
         file_opened->st->st_atime = now;
     }
-    printf("use:%ld free:%ld", usetime, freetime);
     return 0;
 }
 
