@@ -328,10 +328,10 @@ static void *oshfs_init(struct fuse_conn_info *conn)
     memcpy(mem_space_starting_point + offset_to_blocksize, &blocksize, sizeof(size_t));
     
     memcpy(mem_space_starting_point + offset_to_blocknr, &blocknr, sizeof(size_t));
-    
-    mem[0] = mem_space_starting_point + offset_to_MemSpace;
-    for(int i = 0 ; i < blocknr - 2; i++){
-        mem[i] = (char *)mem[0] + i * blocksize;
+    mem[0] = mem_space_starting_point;
+    mem[1] = mem_space_starting_point + offset_to_MemSpace;
+    for(int i = 1 ; i < blocknr - 2; i++){
+        mem[i] = (char *)mem[1] + i * blocksize;
     }
 
     char * FileNodeAddressSpace, * LinkListAddressSpace;
@@ -354,7 +354,7 @@ static void *oshfs_init(struct fuse_conn_info *conn)
     aMemHead = link_list_address_space_init(Malloc, NULL, 0);
     aMemHeap = aMemHead;
 
-    for(int i = 0; i < blocknr - 2; i++) {
+    for(int i = 1; i < blocknr - 2; i++) {
         munmap(mem[i], blocksize);
         aMemHeap = append_link_list(mem[i], aMemHeap, MemTableInit);
     }
