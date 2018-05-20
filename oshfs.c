@@ -52,6 +52,9 @@ static int offset_to_MemSpace;
 
 int State;
 
+size_t umount_time = 0, umount_size = 0;
+size_t mount_time = 0, mount_size = 0;
+
 #define Initialize 0
 #define Malloc 1
 #define Free 2
@@ -189,6 +192,7 @@ static struct LinkList* append_link_list(char * mem_block, struct LinkList *heap
     if(mem_block == NULL)         //若是文件内容的头节点
         return heap;
     heap->next = link_list_address_space_init(Malloc, NULL, 0);
+    size_t blocksize = *((size_t *)(mem_space_starting_point + offset_to_blocksize));
     if(heap->next){
         heap->next->prev = heap;
         heap = heap->next;
@@ -199,9 +203,13 @@ static struct LinkList* append_link_list(char * mem_block, struct LinkList *heap
     {
         case MemFree: 
             munmap(mem_block, blocksize);
+            umount_time++;
+            umount_size+=blocksize;
             break;
         case MemUse :
-            mem_block = mmap(mem_block, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            heap->mem_block = mmap(mem_block, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            mount_time++;
+            mount_size+=blocksize;
             break;
         case DataAppend: 
             break;
