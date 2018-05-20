@@ -27,8 +27,10 @@
 };
 ```
 ## 目标实现情况
-### 设置的全局变量只有 blocksize, blocknr, 第 0 号块内的各信息存储位置偏移量和某些操作的辅助变量. 读取 filenode 链表的头指针, FileNodeAddressSpace, LinkListAddressSpace 等关键信息时都是通过读取内存文件系统内的块完成的.
-### mmap()之后 mem\[1\] 到 mem\[blocknr - 3\] 的块指针都进行了 munmap 操作, 后续取用释放时再针对这些进行操作.
+### 内容映射
+设置的全局变量只有 blocksize, blocknr, 第 0 号块内的各信息存储位置偏移量和某些操作的辅助变量. 读取 filenode 链表的头指针, FileNodeAddressSpace, LinkListAddressSpace 等关键信息时都是通过读取内存文件系统内的块完成的.
+### 动态内存管理
+mmap()之后 mem\[1\] 到 mem\[blocknr - 3\] 的块指针都进行了 munmap 操作, 后续取用释放时再针对这些进行操作.
 ### 扩展方面
 + 保证至少 size 达到约 2000 B 以上(足够存储FileNodeAddressSpace, LinkListAddressSpace 和 mem\[0])的情况下, size 和 MEMNUM 可以任意设置.(但可用的 blocknr 比 MEMNUM 少一些, 因为通常 FileNodeAddressSpace, LinkListAddressSpace 会占据多个块)
 + 另外针对读写操作进行了一定程度的优化, 在向文件读写内容, 执行一次 oshfs_write 或 oshfs_read 函数时, 若是承接上一次的读写, 在同一个块或者下一个块内进行读写, 将不会再一次遍历文件的 mem 块而直接在同一个, 或者后继块上读写. 并且由于可用块和可用结点的队列和栈的实现, 分配一个结点和内存块的时间复杂度都是 O(1), 一定程度上提升了读写性能. 测试写简单的大文件时速度能达到 400M / s 以上.
